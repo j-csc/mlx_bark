@@ -43,6 +43,7 @@ model_args = {
 }
 
 
+# nanogpt_mlx implementation
 class CausalSelfAttention(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -80,6 +81,7 @@ class CausalSelfAttention(nn.Module):
         return mx.tril(mx.ones([N, N])).reshape(1, 1, N, N).astype(dtype)
 
 
+# Back up non-causal attention
 class Attention(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
