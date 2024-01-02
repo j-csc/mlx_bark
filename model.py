@@ -143,23 +143,23 @@ class MLP(nn.Module):
         return self.dropout(self.c_proj(nn.gelu(self.c_fc(x))))
 
 
-class TransformerBlock(nn.Module):
+class Block(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
         self.ln_1 = nn.LayerNorm(args.n_embd)
-        self.attention = Attention(args)
+        self.attn = Attention(args)
         self.ln_2 = nn.LayerNorm(args.n_embd)
-        self.feed_forward = MLP(args)
+        self.mlp = MLP(args)
 
     def forward(
         self,
         x: mx.array,
         cache: Optional[Tuple[mx.array, mx.array]] = None,
     ):
-        r, cache = self.attention(self.ln_1(x), cache)
+        r, cache = self.attn(self.ln_1(x), cache)
         h = x + r
-        r = self.feed_forward(self.ln_2(h))
+        r = self.mlp(self.ln_2(h))
         out = h + r
         return out, cache
 
@@ -171,7 +171,7 @@ class BarkCoarse(nn.Module):
         self.wte = nn.Embedding(args.input_vocab_size, args.n_embd)
         self.wpe = nn.Embedding(args.block_size, args.n_embd)
         self.drop = nn.Dropout(args.dropout)
-        self.layers = [TransformerBlock(args=args) for _ in range(args.n_layer)]
+        self.layers = [Block(args=args) for _ in range(args.n_layer)]
         self.ln_f = nn.LayerNorm(args.n_embd)
         self.lm_head = nn.Linear(args.n_embd, args.output_vocab_size, bias=False)
 
