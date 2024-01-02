@@ -81,57 +81,6 @@ class CausalSelfAttention(nn.Module):
         return mx.tril(mx.ones([N, N])).reshape(1, 1, N, N).astype(dtype)
 
 
-# Back up non-causal attention
-class Attention(nn.Module):
-    def __init__(self, args: ModelArgs):
-        super().__init__()
-        self.args = args
-
-        self.c_attn = nn.Linear(args.n_embd, 3 * args.n_embd, bias=args.bias)
-        self.c_proj = nn.Linear(args.n_embd, args.n_embd, bias=args.bias)
-        self.attn_dropout = nn.Dropout(args.dropout)
-        self.resid_dropout = nn.Dropout(args.dropout)
-        self.n_head = args.n_head
-        self.n_embd = args.n_embd
-        self.dropout = nn.Dropout(args.dropout)
-        self.bias = mx.tril(mx.ones((args.block_size, args.block_size))).reshape(
-            1, 1, args.block_size, args.block_size
-        )
-
-    def __call__(
-        self,
-        x: mx.array,
-        cache: Optional[Tuple[mx.array, mx.array]] = None,
-    ) -> mx.array:
-        B, T, C = x.size()
-
-        queries, keys, values = self.c_attn(x).split(self.n_embd, dim=2)
-        queries, keys, values = [
-            z.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
-            for z in (queries, keys, values)
-        ]  # (B, nh, T, hs)
-
-        if cache is not None:
-            key_cache, value_cache = cache
-            keys = mx.concatenate([key_cache, keys], dim=-2)
-            values = mx.concatenate([value_cache, values], dim=-2)
-
-        FULL_T = keys.shape[-2]  # full length of the sequence
-        scale = 1.0 / math.sqrt(keys.size(-1))
-
-        scores = (queries @ keys.transpose(-2, -1)) * scale
-        mask = self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0
-        scores = mx.where(mask, float("-inf"), scores)
-        scores = mx.softmax(scores, dim=-1)
-        scores = self.attn_dropout(scores)
-        out = scores @ values  # (Bs, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        out = out.transpose(1, 2).contiguous().view(B, T, C)
-
-        # output projection
-        out = self.resid_dropout(self.c_proj(out))
-        return out, (keys, values)
-
-
 class MLP(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -150,23 +99,25 @@ class Block(nn.Module):
         super().__init__()
         self.args = args
         self.ln_1 = nn.LayerNorm(args.n_embd)
-        self.attn = Attention(args)
+        self.attn = CausalSelfAttention(args)
         self.ln_2 = nn.LayerNorm(args.n_embd)
         self.mlp = MLP(args)
 
     def forward(
         self,
         x: mx.array,
+        mask,
         cache: Optional[Tuple[mx.array, mx.array]] = None,
     ):
-        r, cache = self.attn(self.ln_1(x), cache)
+        r, cache = self.attn(self.ln_1(x), mask, cache)
         h = x + r
         r = self.mlp(self.ln_2(h))
         out = h + r
         return out, cache
 
 
-class BarkCoarse(nn.Module):
+# Bark GPT - Coarse
+class GPT(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
@@ -177,84 +128,58 @@ class BarkCoarse(nn.Module):
         self.ln_f = nn.LayerNorm(args.n_embd)
         self.lm_head = nn.Linear(args.n_embd, args.output_vocab_size, bias=False)
 
-    def __call__(self, x: mx.array, cache=None) -> mx.array:
+    def __call__(
+        self,
+        x: mx.array,
+        cache: Optional[Tuple[mx.array, mx.array]] = None,
+        merge_context: bool = False,
+        position_ids: Optional[mx.array] = None,
+    ) -> mx.array:
         b, t = x.size()
-        tok_emb = self.wte(x)
 
-        return x, cache
-
-    def forward(
-        self, idx, merge_context=False, past_kv=None, position_ids=None, use_cache=False
-    ):
-        device = idx.device
-        b, t = idx.size()
-        if past_kv is not None:
+        if cache is not None:
             assert t == 1
-            tok_emb = self.transformer.wte(
-                idx
-            )  # token embeddings of shape (b, t, n_embd)
+            tok_emb = self.wte(x)
         else:
             if merge_context:
-                assert idx.shape[1] >= 256 + 256 + 1
-                t = idx.shape[1] - 256
-            else:
-                assert (
-                    t <= self.config.block_size
-                ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-
-            # forward the GPT model itself
-            if merge_context:
-                tok_emb = torch.cat(
+                assert x.shape[1] >= 256 + 256 + 1
+                t = x.shape[1] - 256
+                tok_emb = mx.concatenate(
                     [
-                        self.transformer.wte(idx[:, :256])
-                        + self.transformer.wte(idx[:, 256 : 256 + 256]),
-                        self.transformer.wte(idx[:, 256 + 256 :]),
+                        self.wte(x[:, :256]) + self.wte(x[:, 256 : 256 + 256]),
+                        self.wte(x[:, 256 + 256 :]),
                     ],
                     dim=1,
                 )
             else:
-                tok_emb = self.transformer.wte(
-                    idx
-                )  # token embeddings of shape (b, t, n_embd)
+                tok_emb = self.wte(x)
 
-        if past_kv is None:
-            past_length = 0
-            past_kv = tuple([None] * len(self.transformer.h))
+        # past length
+
+        pos = mx.arange(0, t, 1, dtype=x.dtype)
+        mask = CausalSelfAttention.create_additive_causal_mask(x.shape[1])
+        tok_emb = self.wte(x)
+        pos_emb = self.wpe(pos)
+        x = self.drop(tok_emb + pos_emb)
+
+        kv_cache = []
+
+        if cache is not None:
+            for i in range(len(cache)):
+                x, cache[i] = self.layers[i](x, mask=None, cache=cache[i])
         else:
-            past_length = past_kv[0][0].size(-2)
+            for block in self.layers:
+                x, curr_cache = block(x, mask=mask)
+                kv_cache.append(curr_cache)
 
-        if position_ids is None:
-            position_ids = torch.arange(
-                past_length, t + past_length, dtype=torch.long, device=device
-            )
-            position_ids = position_ids.unsqueeze(0)  # shape (1, t)
-            assert position_ids.shape == (1, t)
+        x = self.ln_f(x)
 
-        pos_emb = self.transformer.wpe(
-            position_ids
-        )  # position embeddings of shape (1, t, n_embd)
+        logits = self.lm_head(x[:, [-1], :])
 
-        x = self.transformer.drop(tok_emb + pos_emb)
-
-        new_kv = () if use_cache else None
-
-        for i, (block, past_layer_kv) in enumerate(zip(self.transformer.h, past_kv)):
-            x, kv = block(x, past_kv=past_layer_kv, use_cache=use_cache)
-
-            if use_cache:
-                new_kv = new_kv + (kv,)
-
-        x = self.transformer.ln_f(x)
-
-        # inference-time mini-optimization: only forward the lm_head on the very last position
-        logits = self.lm_head(
-            x[:, [-1], :]
-        )  # note: using list [-1] to preserve the time dim
-
-        return (logits, new_kv)
+        return logits, cache
 
 
-class BarkFine(nn.Module):
+class FineGPT(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
