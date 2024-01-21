@@ -43,7 +43,6 @@ model_args = {
 }
 
 
-# nanogpt_mlx implementation
 class CausalSelfAttention(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -155,11 +154,23 @@ class GPT(nn.Module):
                 tok_emb = self.wte(x)
 
         # past length
+        if cache is None:
+            past_length = 0
+            cache = tuple([None] * len(self.transformer.h))
+        else:
+            past_length = cache[0][0].size(-2)
 
-        pos = mx.arange(0, t, 1, dtype=x.dtype)
+        if position_ids is None:
+            position_ids = mx.arange(past_length, t + past_length)
+            position_ids = position_ids.unsqueeze(0)  # shape (1, t)
+            assert position_ids.shape == (1, t)
+
+        pos_emb = self.transformer.wpe(
+            position_ids
+        )  # position embeddings of shape (1, t, n_embd)
+
         mask = CausalSelfAttention.create_additive_causal_mask(x.shape[1])
         tok_emb = self.wte(x)
-        pos_emb = self.wpe(pos)
         x = self.drop(tok_emb + pos_emb)
 
         kv_cache = []
@@ -210,6 +221,6 @@ if __name__ == "__main__":
 
     load_model(args.model_path)
     # break up the weights into bark-coarse and bark-fine
-    bark_coarse = BarkCoarse(model_args["bark-coarse"])
+    bark_coarse = GPT(model_args["bark-coarse"])
     print(bark_coarse)
     pass
