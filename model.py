@@ -80,6 +80,32 @@ class CausalSelfAttention(nn.Module):
         return mx.tril(mx.ones([N, N])).reshape(1, 1, N, N).astype(dtype)
 
 
+class NonCausalSelfAttention(nn.Module):
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+        self.c_attn = nn.Linear(args.n_embd, 3 * args.n_embd, bias=args.bias)
+        self.c_proj = nn.Linear(args.n_embd, args.n_embd, bias=args.bias)
+        self.attn_dropout = nn.Dropout(args.dropout)
+        self.resid_dropout = nn.Dropout(args.dropout)
+        self.n_head = args.n_head
+        self.n_embd = args.n_embd
+        self.dropout = args.dropout
+
+    def __call__(self, x):
+        B, T, C = x.shape
+        query, key, value = mx.split(self.c_attn(x), 3, axis=2)
+        key = key.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
+        query = query.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
+        value = value.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
+
+        att = (query @ key.transpose(0, 1, 3, 2)) * (1.0 / math.sqrt(key.shape[3]))
+        att = mx.softmax(att.astype(mx.float32), axis=-1).astype(att.dtype)
+        att = self.attn_dropout(att)
+        y = (att @ value).transpose(0, 2, 1, 3).reshape(B, T, C)
+        y = self.resid_dropout(self.c_proj(y))
+        return y
+
+
 class MLP(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -115,7 +141,21 @@ class Block(nn.Module):
         return out, cache
 
 
-# Bark GPT - Coarse
+class FineBlock(nn.Module):
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+        self.args = args
+        self.ln_1 = nn.LayerNorm(args.n_embd)
+        self.attn = NonCausalSelfAttention(args)
+        self.ln_2 = nn.LayerNorm(args.n_embd)
+        self.mlp = MLP(args)
+
+    def forward(self, x: mx.array):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
+
 class GPT(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -194,6 +234,40 @@ class FineGPT(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
+        self.n_codes_total = args.n_codes_total
+        self.wtes = [
+            nn.Embedding(args.input_vocab_size, args.n_embd)
+            for _ in range(args.n_codes_total)
+        ]
+        self.wpe = nn.Embedding(args.block_size, args.n_embd)
+        self.drop = nn.Dropout(args.dropout)
+        self.h = [FineBlock(args=args) for _ in range(args.n_layer)]
+        self.ln_f = nn.LayerNorm(args.n_embd)
+        self.lm_heads = [
+            nn.Linear(args.n_embd, args.output_vocab_size, bias=False)
+            for _ in range(args.n_codes_total)
+        ]
+        for i in range(self.n_codes_total - args.n_codes_given):
+            self.wtes[i + 1].weight = self.lm_heads[i].weight
+
+    def __call__(self, pred_idx: mx.array, idx: mx.array) -> mx.array:
+        b, t, codes = idx.size()
+        pos = mx.arange(0, t).unsqueeze(0)
+        tok_embs = [
+            wte(idx[:, :, i]).unsqueeze(-1)
+            for i, wte in enumerate(self.transformer.wtes)
+        ]  # token embeddings of shape (b, t, n_embd)
+        tok_emb = mx.cat(tok_embs, dim=-1)
+        pos_emb = self.transformer.wpe(
+            pos
+        )  # position embeddings of shape (1, t, n_embd)
+        x = tok_emb[:, :, :, : pred_idx + 1].sum(dim=-1)
+        x = self.transformer.drop(x + pos_emb)
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        logits = self.lm_heads[pred_idx - self.config.n_codes_given](x)
+        return logits
 
 
 def load_model(model_path: str):
