@@ -14,6 +14,26 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 import math
+from transformers import BertTokenizer
+import glob
+import torch
+
+TEXT_ENCODING_OFFSET = 10_048
+SEMANTIC_PAD_TOKEN = 10_000
+TEXT_PAD_TOKEN = 129595
+SEMANTIC_INFER_TOKEN = 129_599
+
+CONTEXT_WINDOW_SIZE = 1024
+
+SEMANTIC_RATE_HZ = 49.9
+SEMANTIC_VOCAB_SIZE = 10_000
+
+CODEBOOK_SIZE = 1024
+N_COARSE_CODEBOOKS = 2
+N_FINE_CODEBOOKS = 8
+COARSE_RATE_HZ = 75
+
+SAMPLE_RATE = 24_000
 
 
 class Keys(Enum):
@@ -174,7 +194,8 @@ class GPT(nn.Module):
         merge_context: bool = False,
         position_ids: Optional[mx.array] = None,
     ) -> mx.array:
-        b, t = x.size()
+        print(x)
+        b, t = x.shape
 
         if cache is not None:
             assert t == 1
@@ -270,14 +291,31 @@ class FineGPT(nn.Module):
         return logits
 
 
-def load_model(model_path: str):
-    weights = mx.load(model_path)
-    weights = tree_unflatten(list(weights.items()))
+def load_model(model_dir: str):
+    # break up the weights into bark-coarse and bark-fine
+    files = glob.glob(f"{model_dir}*.npz")
+    tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+    bark_text = GPT(model_args["bark-coarse"])
+    bark_fine = FineGPT(model_args["bark-fine"])
+    bark_coarse = GPT(model_args["bark-coarse"])
+    for f in files:
+        weights = mx.load(str(f))
+        weights = tree_unflatten(list(weights.items()))
+        if "coarse" in f:
+            bark_coarse.update(weights)
+        elif "fine" in f:
+            bark_fine.update(weights)
+        elif "text" in f:
+            bark_text.update(weights)
+    mx.eval(bark_coarse.parameters())
+    mx.eval(bark_fine.parameters())
+    mx.eval(bark_text.parameters())
+    return tokenizer, bark_coarse, bark_fine, bark_text
 
 
 def generate(
+    model: nn.Module,
     text: str,
-    history_prompt: Optional[Union[Dict, str]] = None,
     temp: float = 0.7,
     waveform_temp: float = 0.7,
     silent: bool = False,
@@ -288,13 +326,54 @@ def generate(
     pass
 
 
+def generate_text_semantic(
+    model: nn.Module, tokenizer: any, text: str, temp: float = 0.7, silent: bool = False
+):
+    encoded_text = (
+        mx.array(tokenizer.encode(text, add_special_tokens=False))
+        + TEXT_ENCODING_OFFSET
+    )
+    if len(encoded_text) > 256:
+        p = round((len(encoded_text) - 256) / len(encoded_text) * 100, 1)
+        encoded_text = encoded_text[:256]
+    encoded_text = mx.pad(
+        encoded_text,
+        (0, 256 - len(encoded_text)),
+        constant_values=TEXT_PAD_TOKEN,
+    )
+    semantic_history = mx.array([SEMANTIC_PAD_TOKEN] * 256)
+    x = mx.concatenate(
+        [encoded_text, semantic_history, mx.array([SEMANTIC_INFER_TOKEN])]
+    ).reshape(1, -1)
+
+    n_tot_steps = 768
+    cache = None
+    for i in range(n_tot_steps):
+        # look at using cache
+        if cache:
+            x = x[:, [-1]]
+
+        logits, cache = model(x)
+        logits = logits[:, -1, :] / temp
+        relevant_logits = logits[0, 0, :SEMANTIC_VOCAB_SIZE]
+        probs = mx.softmax(relevant_logits)
+        next_token = mx.random.multinomial(probs, dtype=mx.int32)
+        x = mx.concatenate([x, next_token.reshape(1, 1)], axis=1)
+    out = x.detach().cpu().numpy().squeeze()[256 + 256 + 1 :]
+    assert all(0 <= out) and all(out < SEMANTIC_VOCAB_SIZE)
+    return out
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bark inference script")
     parser.add_argument("model_path")
     args = parser.parse_args()
 
-    load_model(args.model_path)
-    # break up the weights into bark-coarse and bark-fine
-    bark_coarse = GPT(model_args["bark-coarse"])
-    print(bark_coarse)
+    tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
+
+    # generate semantic tokens
+    generate_text_semantic(bark_text, tokenizer, "hello world")
+
+    # generate waveform
+
     pass
