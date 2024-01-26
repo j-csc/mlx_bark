@@ -109,7 +109,7 @@ class NonCausalSelfAttention(nn.Module):
         self.resid_dropout = nn.Dropout(args.dropout)
         self.n_head = args.n_head
         self.n_embd = args.n_embd
-        self.dropout = args.dropout
+        # self.dropout = args.dropout
 
     def __call__(self, x):
         B, T, C = x.shape
@@ -133,10 +133,11 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(args.n_embd, 4 * args.n_embd, bias=False)
         self.c_proj = nn.Linear(4 * args.n_embd, args.n_embd, bias=False)
         self.gelu = nn.GELU()
-        self.dropout = nn.Dropout(args.dropout)
+        # self.dropout = nn.Dropout(args.dropout)
 
     def __call__(self, x: mx.array) -> mx.array:
-        return self.dropout(self.c_proj(nn.gelu(self.c_fc(x))))
+        # return self.dropout(self.c_proj(nn.gelu(self.c_fc(x))))
+        return self.c_proj(nn.gelu(self.c_fc(x)))
 
 
 class Block(nn.Module):
@@ -182,7 +183,7 @@ class GPT(nn.Module):
         self.args = args
         self.wte = nn.Embedding(args.input_vocab_size, args.n_embd)
         self.wpe = nn.Embedding(args.block_size, args.n_embd)
-        self.drop = nn.Dropout(args.dropout)
+        # self.drop = nn.Dropout(args.dropout)
         self.layers = [Block(args=args) for _ in range(args.n_layer)]
         self.ln_f = nn.LayerNorm(args.n_embd)
         self.lm_head = nn.Linear(args.n_embd, args.output_vocab_size, bias=False)
@@ -230,7 +231,8 @@ class GPT(nn.Module):
 
         mask = CausalSelfAttention.create_additive_causal_mask(x.shape[1])
         tok_emb = self.wte(x)
-        x = self.drop(tok_emb + pos_emb)
+        x = tok_emb + pos_emb
+        # x = self.drop(tok_emb + pos_emb)
 
         kv_cache = []
 
@@ -259,7 +261,7 @@ class FineGPT(nn.Module):
             for _ in range(args.n_codes_total)
         ]
         self.wpe = nn.Embedding(args.block_size, args.n_embd)
-        self.drop = nn.Dropout(args.dropout)
+        # self.drop = nn.Dropout(args.dropout)
         self.layers = [FineBlock(args=args) for _ in range(args.n_layer)]
         self.ln_f = nn.LayerNorm(args.n_embd)
         self.lm_heads = [
@@ -270,7 +272,7 @@ class FineGPT(nn.Module):
             self.wtes[i + 1].weight = self.lm_heads[i].weight
 
     def __call__(self, pred_idx: mx.array, idx: mx.array) -> mx.array:
-        b, t, codes = idx.size()
+        b, t, codes = idx.shape
         pos = mx.arange(0, t).unsqueeze(0)
         tok_embs = [
             wte(idx[:, :, i]).unsqueeze(-1) for i, wte in enumerate(self.wtes)
@@ -278,7 +280,8 @@ class FineGPT(nn.Module):
         tok_emb = mx.cat(tok_embs, dim=-1)
         pos_emb = self.wpe(pos)  # position embeddings of shape (1, t, n_embd)
         x = tok_emb[:, :, :, : pred_idx + 1].sum(dim=-1)
-        x = self.drop(x + pos_emb)
+        x = x + pos_emb
+        # x = self.drop(x + pos_emb)
         for block in self.layers:
             x = block(x)
         x = self.ln_f(x)
@@ -297,11 +300,14 @@ def load_model(model_dir: str):
         weights = mx.load(str(f))
         weights = tree_unflatten(list(weights.items()))
         if "coarse" in f:
+            print(weights.keys())
+            print(bark_coarse.parameters().keys())
             bark_coarse.update(weights)
         elif "fine" in f:
+            print(f)
+            print(weights.keys())
             print(bark_fine.parameters().keys())
             bark_fine.update(weights)
-            print(bark_fine.parameters().keys())
         elif "text" in f:
             bark_text.update(weights)
     mx.eval(bark_coarse.parameters())

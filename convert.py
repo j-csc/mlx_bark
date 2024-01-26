@@ -27,6 +27,9 @@ if __name__ == "__main__":
     weights = glob.glob(f"{args.torch_weights_dir}*.pt")
     for w in weights:
         state = torch.load(w, map_location=torch.device("cpu"))["model"]
+
+        if "coarse" in w:
+            print(state.keys())
         state = weight_mapping(state)
         np.savez(
             w.replace(".pt", ".npz"),
