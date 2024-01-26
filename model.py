@@ -87,8 +87,9 @@ class CausalSelfAttention(nn.Module):
             value = mx.concatenate([value_cache, value], axis=2)
 
         att = (query @ key.transpose(0, 1, 3, 2)) * (1.0 / math.sqrt(key.shape[3]))
-        mask = mask.reshape(1, 1, T, T)
-        att = mx.where(mask[:, :, :T, :T] == 0, att, float("-1e9"))
+        if mask:
+            mask = mask.reshape(1, 1, T, T)
+            att = mx.where(mask[:, :, :T, :T] == 0, att, float("-1e9"))
         att = mx.softmax(att.astype(mx.float32), axis=-1).astype(att.dtype)
         att = self.attn_dropout(att)
         y = (att @ value).transpose(0, 2, 1, 3).reshape(B, T, C)
@@ -149,7 +150,7 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(args.n_embd)
         self.mlp = MLP(args)
 
-    def forward(
+    def __call__(
         self,
         x: mx.array,
         mask,
@@ -171,7 +172,7 @@ class FineBlock(nn.Module):
         self.ln_2 = nn.LayerNorm(args.n_embd)
         self.mlp = MLP(args)
 
-    def forward(self, x: mx.array):
+    def __call__(self, x: mx.array):
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
@@ -195,7 +196,6 @@ class GPT(nn.Module):
         merge_context: bool = False,
         position_ids: Optional[mx.array] = None,
     ) -> mx.array:
-        print(x)
         b, t = x.shape
 
         if cache is not None:
@@ -213,20 +213,18 @@ class GPT(nn.Module):
                     dim=1,
                 )
             else:
-                print(x, self.wte)
                 tok_emb = self.wte(x)
 
         # past length
         if cache is None:
             past_length = 0
-            cache = tuple([None] * len(self.h))
+            cache = tuple([None] * len(self.layers))
         else:
             past_length = cache[0][0].size(-2)
 
         if position_ids is None:
             position_ids = mx.arange(past_length, t + past_length)
-            position_ids = position_ids.unsqueeze(0)  # shape (1, t)
-            assert position_ids.shape == (1, t)
+            position_ids = position_ids.reshape(1, -1)  # shape (1, t)
 
         pos_emb = self.wpe(position_ids)  # position embeddings of shape (1, t, n_embd)
 
@@ -239,10 +237,10 @@ class GPT(nn.Module):
 
         if cache is not None:
             for i in range(len(cache)):
-                x, cache[i] = self.layers[i](x, mask=None, cache=cache[i])
+                x, cache = self.layers[i](x, mask=None, cache=cache[i])
         else:
             for block in self.layers:
-                x, curr_cache = block(x, mask=mask)
+                (x, curr_cache) = block(x, mask=mask)
                 kv_cache.append(curr_cache)
 
         x = self.ln_f(x)
@@ -366,7 +364,6 @@ def generate_text_semantic(
         # look at using cache
         if cache:
             x = x[:, [-1]]
-
         logits, cache = model(x)
         logits = logits[:, -1, :] / temp
         relevant_logits = logits[0, 0, :SEMANTIC_VOCAB_SIZE]
@@ -383,7 +380,11 @@ if __name__ == "__main__":
     parser.add_argument("model_path")
     args = parser.parse_args()
 
-    tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
+    # tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
+
+    bark_coarse = GPT(model_args["bark-coarse"])
+    tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+    bark_text = GPT(model_args["bark-coarse"])
 
     # generate semantic tokens
     generate_text_semantic(bark_text, tokenizer, "hello world")
