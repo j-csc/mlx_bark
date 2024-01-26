@@ -213,6 +213,7 @@ class GPT(nn.Module):
                     dim=1,
                 )
             else:
+                print(x, self.wte)
                 tok_emb = self.wte(x)
 
         # past length
@@ -300,15 +301,25 @@ def load_model(model_dir: str):
         weights = mx.load(str(f))
         weights = tree_unflatten(list(weights.items()))
         if "coarse" in f:
-            print(weights.keys())
-            print(bark_coarse.parameters().keys())
+            for name, weight in weights.items():
+                if hasattr(bark_coarse, name):
+                    setattr(bark_coarse, name, weight)
+                else:
+                    print(f"Weight for {name} not found in the model.")
             bark_coarse.update(weights)
         elif "fine" in f:
-            print(f)
-            print(weights.keys())
-            print(bark_fine.parameters().keys())
+            for name, weight in weights.items():
+                if hasattr(bark_fine, name):
+                    setattr(bark_fine, name, weight)
+                else:
+                    print(f"Weight for {name} not found in the model.")
             bark_fine.update(weights)
         elif "text" in f:
+            for name, weight in weights.items():
+                if hasattr(bark_text, name):
+                    setattr(bark_text, name, weight)
+                else:
+                    print(f"Weight for {name} not found in the model.")
             bark_text.update(weights)
     mx.eval(bark_coarse.parameters())
     mx.eval(bark_fine.parameters())
@@ -375,7 +386,7 @@ if __name__ == "__main__":
     tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
 
     # generate semantic tokens
-    # generate_text_semantic(bark_text, tokenizer, "hello world")
+    generate_text_semantic(bark_text, tokenizer, "hello world")
 
     # generate waveform
 
