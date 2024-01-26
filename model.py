@@ -217,7 +217,7 @@ class GPT(nn.Module):
         # past length
         if cache is None:
             past_length = 0
-            cache = tuple([None] * len(self.transformer.h))
+            cache = tuple([None] * len(self.h))
         else:
             past_length = cache[0][0].size(-2)
 
@@ -226,9 +226,7 @@ class GPT(nn.Module):
             position_ids = position_ids.unsqueeze(0)  # shape (1, t)
             assert position_ids.shape == (1, t)
 
-        pos_emb = self.transformer.wpe(
-            position_ids
-        )  # position embeddings of shape (1, t, n_embd)
+        pos_emb = self.wpe(position_ids)  # position embeddings of shape (1, t, n_embd)
 
         mask = CausalSelfAttention.create_additive_causal_mask(x.shape[1])
         tok_emb = self.wte(x)
@@ -262,7 +260,7 @@ class FineGPT(nn.Module):
         ]
         self.wpe = nn.Embedding(args.block_size, args.n_embd)
         self.drop = nn.Dropout(args.dropout)
-        self.h = [FineBlock(args=args) for _ in range(args.n_layer)]
+        self.layers = [FineBlock(args=args) for _ in range(args.n_layer)]
         self.ln_f = nn.LayerNorm(args.n_embd)
         self.lm_heads = [
             nn.Linear(args.n_embd, args.output_vocab_size, bias=False)
@@ -275,18 +273,15 @@ class FineGPT(nn.Module):
         b, t, codes = idx.size()
         pos = mx.arange(0, t).unsqueeze(0)
         tok_embs = [
-            wte(idx[:, :, i]).unsqueeze(-1)
-            for i, wte in enumerate(self.transformer.wtes)
+            wte(idx[:, :, i]).unsqueeze(-1) for i, wte in enumerate(self.wtes)
         ]  # token embeddings of shape (b, t, n_embd)
         tok_emb = mx.cat(tok_embs, dim=-1)
-        pos_emb = self.transformer.wpe(
-            pos
-        )  # position embeddings of shape (1, t, n_embd)
+        pos_emb = self.wpe(pos)  # position embeddings of shape (1, t, n_embd)
         x = tok_emb[:, :, :, : pred_idx + 1].sum(dim=-1)
-        x = self.transformer.drop(x + pos_emb)
-        for block in self.transformer.h:
+        x = self.drop(x + pos_emb)
+        for block in self.layers:
             x = block(x)
-        x = self.transformer.ln_f(x)
+        x = self.ln_f(x)
         logits = self.lm_heads[pred_idx - self.config.n_codes_given](x)
         return logits
 
@@ -304,7 +299,9 @@ def load_model(model_dir: str):
         if "coarse" in f:
             bark_coarse.update(weights)
         elif "fine" in f:
+            print(bark_fine.parameters().keys())
             bark_fine.update(weights)
+            print(bark_fine.parameters().keys())
         elif "text" in f:
             bark_text.update(weights)
     mx.eval(bark_coarse.parameters())
@@ -372,7 +369,7 @@ if __name__ == "__main__":
     tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
 
     # generate semantic tokens
-    generate_text_semantic(bark_text, tokenizer, "hello world")
+    # generate_text_semantic(bark_text, tokenizer, "hello world")
 
     # generate waveform
 
