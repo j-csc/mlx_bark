@@ -63,6 +63,25 @@ model_args = {
 }
 
 
+class LayerNorm(nn.Module):
+    def __init__(self, dims: int, eps: float, bias: bool = True):
+        super().__init__()
+        self.bias = mx.zeros((dims,)) if bias else None
+        self.weight = mx.ones((dims,))
+        self.dims = dims
+        self.eps = eps
+
+    def __call__(self, x):
+        mean = mx.mean(axis=-1, keepdims=True)
+        var = mx.var(x, axis=-1, keepdims=True)
+        x = (x - mean) * mx.rsqrt(var + self.eps)
+        if self.bias is not None:
+            x = x * self.weight + self.bias
+        else:
+            x = x * self.weight
+        return x
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
@@ -73,28 +92,35 @@ class CausalSelfAttention(nn.Module):
         self.n_head = args.n_head
         self.n_embd = args.n_embd
         self.dropout = args.dropout
+        self.bias = mx.tril(mx.ones([args.block_size, args.block_size])).reshape(
+            1, 1, args.block_size, args.block_size
+        )
 
-    def __call__(self, x, mask, cache=None):
+    def __call__(self, x, past_kv=None, use_cache=False):
         B, T, C = x.shape
         query, key, value = mx.split(self.c_attn(x), 3, axis=2)
         key = key.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
         query = query.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
         value = value.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
-
-        if cache is not None:
-            key_cache, value_cache = cache
-            key = mx.concatenate([key_cache, key], axis=2)
-            value = mx.concatenate([value_cache, value], axis=2)
-
+        if past_kv is not None:
+            past_key, past_value = past_kv
+            key = mx.concatenate([past_key, key], axis=-2)
+            value = mx.concatenate([past_value, value], axis=-2)
+        FULL_T = key.shape[-2]
+        if use_cache is True:
+            present = (key, value)
+        else:
+            present = None
         att = (query @ key.transpose(0, 1, 3, 2)) * (1.0 / math.sqrt(key.shape[3]))
-        if mask:
-            mask = mask.reshape(1, 1, T, T)
-            att = mx.where(mask[:, :, :T, :T] == 0, att, float("-1e9"))
+        inf_mask = mx.array(
+            self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0, dtype=mx.float32
+        ) * float("-inf")
+        att = mx.where(inf_mask, att, inf_mask)
         att = mx.softmax(att.astype(mx.float32), axis=-1).astype(att.dtype)
         att = self.attn_dropout(att)
         y = (att @ value).transpose(0, 2, 1, 3).reshape(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
-        return y, (key, value)
+        return (y, present)
 
     @staticmethod
     def create_additive_causal_mask(N: int, dtype: mx.Dtype = mx.float32):
