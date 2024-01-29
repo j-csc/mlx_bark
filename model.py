@@ -160,21 +160,22 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(args.n_embd, 4 * args.n_embd, bias=False)
         self.c_proj = nn.Linear(4 * args.n_embd, args.n_embd, bias=False)
         self.gelu = nn.GELU()
-        # self.dropout = nn.Dropout(args.dropout)
+        self.dropout = nn.Dropout(args.dropout)
 
     def __call__(self, x: mx.array) -> mx.array:
-        # return self.dropout(self.c_proj(nn.gelu(self.c_fc(x))))
-        return self.c_proj(nn.gelu(self.c_fc(x)))
+        return self.dropout(self.c_proj(nn.gelu(self.c_fc(x))))
+        # return self.c_proj(nn.gelu(self.c_fc(x)))
 
 
 class Block(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ModelArgs, layer_idx: int = 0):
         super().__init__()
         self.args = args
         self.ln_1 = nn.LayerNorm(args.n_embd)
         self.attn = CausalSelfAttention(args)
         self.ln_2 = nn.LayerNorm(args.n_embd)
         self.mlp = MLP(args)
+        self.layer_idx = layer_idx
 
     def __call__(
         self,
@@ -186,7 +187,7 @@ class Block(nn.Module):
         h = x + r
         r = self.mlp(self.ln_2(h))
         out = h + r
-        return out, cache
+        return (out, cache)
 
 
 class FineBlock(nn.Module):
