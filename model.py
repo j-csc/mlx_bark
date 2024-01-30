@@ -67,9 +67,11 @@ class LayerNorm(nn.Module):
         self.eps = eps
 
     def __call__(self, x):
+        print("LN:", x)
         mean = mx.mean(x, axis=-1, keepdims=True)
         var = mx.var(x, axis=-1, keepdims=True)
         x = (x - mean) * mx.rsqrt(var + self.eps)
+        print("outLN", x)
         if self.bias is not None:
             x = x * self.weight + self.bias
         else:
@@ -93,6 +95,7 @@ class CausalSelfAttention(nn.Module):
 
     def __call__(self, x, past_kv=None, use_cache=False):
         B, T, C = x.shape
+        print("CausalSelfAttention:", x)
         query, key, value = mx.split(self.c_attn(x), 3, axis=2)
         key = key.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
         query = query.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
@@ -113,13 +116,10 @@ class CausalSelfAttention(nn.Module):
         att = mx.where(inf_mask, att, inf_mask)
         att = mx.softmax(att.astype(mx.float32), axis=-1).astype(att.dtype)
         att = self.attn_dropout(att)
+        print("att:", att, att.shape, value.shape)
         y = (att @ value).transpose(0, 2, 1, 3).reshape(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
         return (y, present)
-
-    @staticmethod
-    def create_additive_causal_mask(N: int, dtype: mx.Dtype = mx.float32):
-        return mx.tril(mx.ones([N, N])).reshape(1, 1, N, N).astype(dtype)
 
 
 class NonCausalSelfAttention(nn.Module):
@@ -158,8 +158,11 @@ class MLP(nn.Module):
         self.dropout = nn.Dropout(args.dropout)
 
     def __call__(self, x: mx.array) -> mx.array:
-        return self.dropout(self.c_proj(nn.gelu(self.c_fc(x))))
-        # return self.c_proj(nn.gelu(self.c_fc(x)))
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
 
 
 class Block(nn.Module):
@@ -173,11 +176,13 @@ class Block(nn.Module):
         self.layer_idx = layer_idx
 
     def __call__(self, x: mx.array, past_kv=None, use_cache=False):
+        print("Block:", x)
         attn_output, prev_kvs = self.attn(
             self.ln_1(x), past_kv=past_kv, use_cache=use_cache
         )
         x = x + attn_output
         x = x + self.mlp(self.ln_2(x))
+        print("outBlock:", x)
         return (x, prev_kvs)
 
 
@@ -362,7 +367,7 @@ def generate_text_semantic(
             x_input = x[:, [-1]]
         else:
             x_input = x
-        print(x_input, x_input.shape)
+
         logits, kv_cache = model(
             x_input, merge_context=True, use_cache=use_kv_caching, past_kv=kv_cache
         )
@@ -394,7 +399,7 @@ def generate_coarse(
     max_semantic_history = int(
         math.floor(max_coarse_history / semantic_to_coarse_ratio)
     )
-    print(x_semantic, x_semantic.shape)
+
     x_semantic_history = mx.array([], dtype=mx.int32)
     x_coarse_history = mx.array([], dtype=mx.int32)
     n_steps = int(
