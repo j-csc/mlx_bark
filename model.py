@@ -131,7 +131,7 @@ class NonCausalSelfAttention(nn.Module):
         self.resid_dropout = nn.Dropout(args.dropout)
         self.n_head = args.n_head
         self.n_embd = args.n_embd
-        # self.dropout = args.dropout
+        self.dropout = args.dropout
 
     def __call__(self, x):
         B, T, C = x.shape
@@ -265,10 +265,9 @@ class GPT(nn.Module):
         return (logits, new_kv)
 
 
-class FineGPT(GPT):
+class FineGPT(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
-        del self.lm_head
         self.args = args
         self.n_codes_total = args.n_codes_total
         self.wtes = [
@@ -320,25 +319,10 @@ def load_model(model_dir: str):
         weights = mx.load(str(f))
         weights = tree_unflatten(list(weights.items()))
         if "coarse" in f:
-            for name, weight in weights.items():
-                if hasattr(bark_coarse, name):
-                    setattr(bark_coarse, name, weight)
-                else:
-                    print(f"Weight for {name} not found in the model.")
             bark_coarse.update(weights)
         elif "fine" in f:
-            for name, weight in weights.items():
-                if hasattr(bark_fine, name):
-                    setattr(bark_fine, name, weight)
-                else:
-                    print(f"Weight for {name} not found in the model.")
-            bark_fine.update(weights)
+            pass
         elif "text" in f:
-            for name, weight in weights.items():
-                if hasattr(bark_text, name):
-                    setattr(bark_text, name, weight)
-                else:
-                    print(f"Weight for {name} not found in the model.")
             bark_text.update(weights)
     mx.eval(bark_coarse.parameters())
     mx.eval(bark_fine.parameters())
@@ -378,16 +362,22 @@ def generate_text_semantic(
             x_input = x[:, [-1]]
         else:
             x_input = x
+        print(x_input, x_input.shape)
         logits, kv_cache = model(
             x_input, merge_context=True, use_cache=use_kv_caching, past_kv=kv_cache
         )
         relevant_logits = logits[0, 0, :SEMANTIC_VOCAB_SIZE]
+        # Early stop
+        relevant_logits = mx.concatenate(
+            [relevant_logits, logits[0, 0, SEMANTIC_PAD_TOKEN].reshape(1)], axis=-1
+        )
         probs = mx.softmax(relevant_logits / temp, axis=-1)
         next_token = mx.random.categorical(probs, num_samples=1)
         next_token = next_token.astype(mx.int32)
+        if next_token == SEMANTIC_VOCAB_SIZE or (probs[-1] >= 0.2):
+            break
         x = mx.concatenate([x, next_token.reshape(1, 1)], axis=1)
     out = x.squeeze()[256 + 256 + 1 :]
-    # assert all(0 <= out) and all(out < SEMANTIC_VOCAB_SIZE)
     return out
 
 
@@ -404,6 +394,7 @@ def generate_coarse(
     max_semantic_history = int(
         math.floor(max_coarse_history / semantic_to_coarse_ratio)
     )
+    print(x_semantic, x_semantic.shape)
     x_semantic_history = mx.array([], dtype=mx.int32)
     x_coarse_history = mx.array([], dtype=mx.int32)
     n_steps = int(
@@ -480,18 +471,16 @@ if __name__ == "__main__":
     parser.add_argument("model_path")
     args = parser.parse_args()
 
-    # tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
+    tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
 
-    bark_coarse = GPT(model_args["bark-coarse"])
-    tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
-    bark_text = GPT(model_args["bark-coarse"])
+    # bark_coarse = GPT(model_args["bark-coarse"])
+    # tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
+    # bark_text = GPT(model_args["bark-coarse"])
 
     # generate semantic tokens
-    semantic_tokens = generate_text_semantic(
-        bark_text, tokenizer, "hello world hello world"
-    )
-
+    semantic_tokens = generate_text_semantic(bark_text, tokenizer, "Hello World!")
+    print(semantic_tokens, semantic_tokens.shape)
     # generate waveform
-    coarse_codes = generate_coarse(bark_coarse, semantic_tokens)
+    # coarse_codes = generate_coarse(bark_coarse, x_semantic=semantic_tokens)
 
     pass

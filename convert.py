@@ -28,7 +28,7 @@ if __name__ == "__main__":
     for w in weights:
         state = torch.load(w, map_location=torch.device("cpu"))["model"]
 
-        if "coarse" in w:
+        if "fine" in w:
             print(state.keys())
         state = weight_mapping(state)
         np.savez(
