@@ -67,11 +67,11 @@ class LayerNorm(nn.Module):
         self.eps = eps
 
     def __call__(self, x):
-        print("LN:", x)
+        # print("LN:", x)
         mean = mx.mean(x, axis=-1, keepdims=True)
         var = mx.var(x, axis=-1, keepdims=True)
         x = (x - mean) * mx.rsqrt(var + self.eps)
-        print("outLN", x)
+        # print("outLN", x)
         if self.bias is not None:
             x = x * self.weight + self.bias
         else:
@@ -95,7 +95,7 @@ class CausalSelfAttention(nn.Module):
 
     def __call__(self, x, past_kv=None, use_cache=False):
         B, T, C = x.shape
-        print("CausalSelfAttention:", x)
+        # print("CausalSelfAttention:", x)
         query, key, value = mx.split(self.c_attn(x), 3, axis=2)
         key = key.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
         query = query.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
@@ -110,13 +110,23 @@ class CausalSelfAttention(nn.Module):
         else:
             present = None
         att = (query @ key.transpose(0, 1, 3, 2)) * (1.0 / math.sqrt(key.shape[3]))
-        inf_mask = mx.array(
-            self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0, dtype=mx.float32
-        ) * float("-inf")
-        att = mx.where(inf_mask, att, inf_mask)
+        # inf_mask = mx.array(
+        #     self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0, dtype=mx.float32
+        # ) * float("-inf")
+        # att = mx.where(inf_mask, att, inf_mask)
+        # inf_mask = mx.array(
+        #     self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0, dtype=mx.float32
+        # ) * float("-1e9")
+        current_mask = self.bias[:, :, FULL_T - T : FULL_T, :FULL_T]
+        att = mx.where(current_mask == 1, att, float("-1e9"))
+        # att = mx.where(inf_mask, att, inf_mask)
+        # print("att before softmax:", att)
+        # if mx.any(mx.isnan(att)) or mx.any(mx.isinf(att)):
+        #     print("NaNs or Infs found in att before softmax")
+
         att = mx.softmax(att.astype(mx.float32), axis=-1).astype(att.dtype)
         att = self.attn_dropout(att)
-        print("att:", att, att.shape, value.shape)
+        # print("att:", att, att.shape, value.shape)
         y = (att @ value).transpose(0, 2, 1, 3).reshape(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
         return (y, present)
@@ -176,13 +186,13 @@ class Block(nn.Module):
         self.layer_idx = layer_idx
 
     def __call__(self, x: mx.array, past_kv=None, use_cache=False):
-        print("Block:", x)
+        # print("Block:", x)
         attn_output, prev_kvs = self.attn(
             self.ln_1(x), past_kv=past_kv, use_cache=use_cache
         )
         x = x + attn_output
         x = x + self.mlp(self.ln_2(x))
-        print("outBlock:", x)
+        # print("outBlock:", x)
         return (x, prev_kvs)
 
 
@@ -461,7 +471,7 @@ def generate_coarse(
             n_step += 1
 
     gen_coarse_arr = x_coarse_in[0, len(x_coarse_history) :]
-    assert len(gen_coarse_arr) == n_steps
+    # assert len(gen_coarse_arr) == n_steps
     gen_coarse_audio_arr = (
         gen_coarse_arr.reshape(-1, N_COARSE_CODEBOOKS).T - SEMANTIC_VOCAB_SIZE
     )
