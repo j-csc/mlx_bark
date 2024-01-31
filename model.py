@@ -410,21 +410,31 @@ def generate_coarse(
     x_semantic = mx.concatenate([x_semantic_history, x_semantic]).astype(mx.int32)
     x_coarse = x_coarse_history.astype(mx.int32)
     base_semantic_idx = len(x_semantic_history)
-    print(x_semantic.shape, x_coarse.shape, n_steps, base_semantic_idx)
     # Inference
     x_semantic_in = x_semantic.reshape(1, -1)
     x_coarse_in = x_coarse.reshape(1, -1)
-    n_window_steps = int(math.ceil(n_steps / sliding_window_len))
+    n_window_steps = int(mx.round(mx.array(n_steps / sliding_window_len)).item())
     n_step = 0
     for _ in tqdm.tqdm(range(n_window_steps), total=n_window_steps, disable=silent):
         semantic_idx = base_semantic_idx + int(
             mx.round(mx.array(n_step / semantic_to_coarse_ratio)).item()
         )
-        x_in = x_semantic_in[:, max(0, semantic_idx - max_semantic_history) :]
+        print(
+            x_semantic_in.shape,
+            x_semantic_in[:, mx.max([0, semantic_idx - max_semantic_history]) :].shape,
+            semantic_idx,
+            max_semantic_history,
+        )
+        x_in = x_semantic_in[:, mx.max(0, semantic_idx - max_semantic_history) :]
         x_in = x_in[:, :256]
         x_in = mx.pad(
             x_in, (0, 256 - x_in.shape[-1]), constant_values=COARSE_SEMANTIC_PAD_TOKEN
         )
+        # print(
+        #     x_in.shape,
+        #     mx.array([COARSE_INFER_TOKEN]).reshape(1, -1).shape,
+        #     x_coarse_in[:, -max_coarse_history:].shape,
+        # )
         x_in = mx.concatenate(
             [
                 x_in,
