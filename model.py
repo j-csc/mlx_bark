@@ -398,14 +398,10 @@ def generate_coarse(
     x_semantic_history = mx.array([], dtype=mx.int32)
     x_coarse_history = mx.array([], dtype=mx.int32)
     n_steps = int(
-        mx.round(
-            mx.floor(
-                mx.array(len(x_semantic))
-                * semantic_to_coarse_ratio
-                / N_COARSE_CODEBOOKS
-            )
+        round(
+            math.floor(len(x_semantic) * semantic_to_coarse_ratio / N_COARSE_CODEBOOKS)
             * N_COARSE_CODEBOOKS
-        ).item()
+        )
     )
     x_semantic = mx.concatenate([x_semantic_history, x_semantic]).astype(mx.int32)
     x_coarse = x_coarse_history.astype(mx.int32)
@@ -413,28 +409,17 @@ def generate_coarse(
     # Inference
     x_semantic_in = x_semantic.reshape(1, -1)
     x_coarse_in = x_coarse.reshape(1, -1)
-    n_window_steps = int(mx.round(mx.array(n_steps / sliding_window_len)).item())
+    n_window_steps = int(round(n_steps / sliding_window_len))
     n_step = 0
     for _ in tqdm.tqdm(range(n_window_steps), total=n_window_steps, disable=silent):
-        semantic_idx = base_semantic_idx + int(
-            mx.round(mx.array(n_step / semantic_to_coarse_ratio)).item()
-        )
-        print(
-            x_semantic_in.shape,
-            x_semantic_in[:, mx.max([0, semantic_idx - max_semantic_history]) :].shape,
-            semantic_idx,
-            max_semantic_history,
-        )
-        x_in = x_semantic_in[:, mx.max(0, semantic_idx - max_semantic_history) :]
+        semantic_idx = base_semantic_idx + int(round(n_step / semantic_to_coarse_ratio))
+        x_in = x_semantic_in[:, max(0, semantic_idx - max_semantic_history) :]
         x_in = x_in[:, :256]
         x_in = mx.pad(
-            x_in, (0, 256 - x_in.shape[-1]), constant_values=COARSE_SEMANTIC_PAD_TOKEN
+            x_in,
+            ((0, 0), (0, 256 - x_in.shape[-1])),
+            constant_values=COARSE_SEMANTIC_PAD_TOKEN,
         )
-        # print(
-        #     x_in.shape,
-        #     mx.array([COARSE_INFER_TOKEN]).reshape(1, -1).shape,
-        #     x_coarse_in[:, -max_coarse_history:].shape,
-        # )
         x_in = mx.concatenate(
             [
                 x_in,
@@ -468,7 +453,6 @@ def generate_coarse(
             n_step += 1
 
     gen_coarse_arr = x_coarse_in[0, len(x_coarse_history) :]
-    # assert len(gen_coarse_arr) == n_steps
     gen_coarse_audio_arr = (
         gen_coarse_arr.reshape(-1, N_COARSE_CODEBOOKS).T - SEMANTIC_VOCAB_SIZE
     )
