@@ -67,11 +67,9 @@ class LayerNorm(nn.Module):
         self.eps = eps
 
     def __call__(self, x):
-        # print("LN:", x)
         mean = mx.mean(x, axis=-1, keepdims=True)
         var = mx.var(x, axis=-1, keepdims=True)
         x = (x - mean) * mx.rsqrt(var + self.eps)
-        # print("outLN", x)
         if self.bias is not None:
             x = x * self.weight + self.bias
         else:
@@ -89,13 +87,14 @@ class CausalSelfAttention(nn.Module):
         self.n_head = args.n_head
         self.n_embd = args.n_embd
         self.dropout = args.dropout
-        self.bias = mx.tril(mx.ones([args.block_size, args.block_size])).reshape(
-            1, 1, args.block_size, args.block_size
+        self.bias = (
+            mx.tril(mx.ones([args.block_size, args.block_size]))
+            .reshape(1, 1, args.block_size, args.block_size)
+            .astype(mx.float32)
         )
 
     def __call__(self, x, past_kv=None, use_cache=False):
         B, T, C = x.shape
-        # print("CausalSelfAttention:", x)
         query, key, value = mx.split(self.c_attn(x), 3, axis=2)
         key = key.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
         query = query.reshape(B, T, self.n_head, C // self.n_head).transpose(0, 2, 1, 3)
@@ -110,23 +109,12 @@ class CausalSelfAttention(nn.Module):
         else:
             present = None
         att = (query @ key.transpose(0, 1, 3, 2)) * (1.0 / math.sqrt(key.shape[3]))
-        # inf_mask = mx.array(
-        #     self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0, dtype=mx.float32
-        # ) * float("-inf")
-        # att = mx.where(inf_mask, att, inf_mask)
-        # inf_mask = mx.array(
-        #     self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0, dtype=mx.float32
-        # ) * float("-1e9")
-        current_mask = self.bias[:, :, FULL_T - T : FULL_T, :FULL_T]
-        att = mx.where(current_mask == 1, att, float("-1e9"))
-        # att = mx.where(inf_mask, att, inf_mask)
-        # print("att before softmax:", att)
-        # if mx.any(mx.isnan(att)) or mx.any(mx.isinf(att)):
-        #     print("NaNs or Infs found in att before softmax")
 
+        att = mx.where(
+            self.bias[:, :, FULL_T - T : FULL_T, :FULL_T] == 0, float("-1e9"), att
+        )
         att = mx.softmax(att.astype(mx.float32), axis=-1).astype(att.dtype)
         att = self.attn_dropout(att)
-        # print("att:", att, att.shape, value.shape)
         y = (att @ value).transpose(0, 2, 1, 3).reshape(B, T, C)
         y = self.resid_dropout(self.c_proj(y))
         return (y, present)
@@ -186,13 +174,11 @@ class Block(nn.Module):
         self.layer_idx = layer_idx
 
     def __call__(self, x: mx.array, past_kv=None, use_cache=False):
-        # print("Block:", x)
         attn_output, prev_kvs = self.attn(
             self.ln_1(x), past_kv=past_kv, use_cache=use_cache
         )
         x = x + attn_output
         x = x + self.mlp(self.ln_2(x))
-        # print("outBlock:", x)
         return (x, prev_kvs)
 
 
@@ -254,7 +240,7 @@ class GPT(nn.Module):
             past_length = 0
             past_kv = tuple([None] * len(self.layers))
         else:
-            past_length = past_kv[0][0].size(-2)
+            past_length = past_kv[0][0].shape[-2]
 
         if position_ids is None:
             position_ids = mx.arange(past_length, t + past_length)
@@ -374,7 +360,7 @@ def generate_text_semantic(
     kv_cache = None
     for i in tqdm.tqdm(range(n_tot_steps)):
         if use_kv_caching and kv_cache is not None:
-            x_input = x[:, [-1]]
+            x_input = x[:, -1:]
         else:
             x_input = x
 
@@ -409,7 +395,6 @@ def generate_coarse(
     max_semantic_history = int(
         math.floor(max_coarse_history / semantic_to_coarse_ratio)
     )
-
     x_semantic_history = mx.array([], dtype=mx.int32)
     x_coarse_history = mx.array([], dtype=mx.int32)
     n_steps = int(
@@ -425,6 +410,8 @@ def generate_coarse(
     x_semantic = mx.concatenate([x_semantic_history, x_semantic]).astype(mx.int32)
     x_coarse = x_coarse_history.astype(mx.int32)
     base_semantic_idx = len(x_semantic_history)
+    print(x_semantic.shape, x_coarse.shape, n_steps, base_semantic_idx)
+    # Inference
     x_semantic_in = x_semantic.reshape(1, -1)
     x_coarse_in = x_coarse.reshape(1, -1)
     n_window_steps = int(math.ceil(n_steps / sliding_window_len))
@@ -488,14 +475,11 @@ if __name__ == "__main__":
 
     tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
 
-    # bark_coarse = GPT(model_args["bark-coarse"])
-    # tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
-    # bark_text = GPT(model_args["bark-coarse"])
-
     # generate semantic tokens
-    semantic_tokens = generate_text_semantic(bark_text, tokenizer, "Hello World!")
-    print(semantic_tokens, semantic_tokens.shape)
+    semantic_tokens = generate_text_semantic(
+        bark_text, tokenizer, "Hello World!", use_kv_caching=True
+    )
     # generate waveform
-    # coarse_codes = generate_coarse(bark_coarse, x_semantic=semantic_tokens)
+    coarse_codes = generate_coarse(bark_coarse, x_semantic=semantic_tokens)
 
     pass
