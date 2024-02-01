@@ -289,14 +289,13 @@ class FineGPT(nn.Module):
     def __call__(self, pred_idx: mx.array, idx: mx.array) -> mx.array:
         b, t, codes = idx.shape
         assert (
-            t <= self.config.block_size
+            t <= self.args.block_size
         ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         assert pred_idx > 0, "cannot predict 0th codebook"
         assert codes == self.n_codes_total, (b, t, codes)
         pos = mx.arange(0, t, dtype=mx.int64).reshape(1, t)  # shape (1, t)
         tok_embs = [
-            wte(idx[:, :, i]).reshape(b, t, -1, 1)
-            for i, wte in enumerate(self.transformer.wtes)
+            wte(idx[:, :, i]).reshape(b, t, -1, 1) for i, wte in enumerate(self.wtes)
         ]  # token embeddings of shape (b, t, n_embd)
         tok_emb = mx.concatenate(tok_embs, axis=-1)
         pos_emb = self.wpe(pos)  # position embeddings of shape (1, t, n_embd)
@@ -322,7 +321,7 @@ def load_model(model_dir: str):
         if "coarse" in f:
             bark_coarse.update(weights)
         elif "fine" in f:
-            pass
+            bark_fine.update(weights)
         elif "text" in f:
             bark_text.update(weights)
     mx.eval(bark_coarse.parameters())
@@ -391,6 +390,7 @@ def generate_coarse(
     sliding_window_len=60,
     use_kv_caching=False,
 ):
+    print("Generating coarse codes...")
     semantic_to_coarse_ratio = COARSE_RATE_HZ / SEMANTIC_RATE_HZ * N_COARSE_CODEBOOKS
     max_semantic_history = int(
         math.floor(max_coarse_history / semantic_to_coarse_ratio)
@@ -462,6 +462,65 @@ def generate_coarse(
     return gen_coarse_audio_arr
 
 
+def generate_fine(
+    model: nn.Module,
+    x_coarse_gen: mx.array,
+    temp: float = 0.5,
+):
+    x_fine_history = None
+    n_coarse = x_coarse_gen.shape[0]
+    in_arr = mx.concatenate(
+        [
+            x_coarse_gen,
+            mx.zeros((N_FINE_CODEBOOKS - n_coarse, x_coarse_gen.shape[1]))
+            + CODEBOOK_SIZE,  # padding
+        ],
+        axis=0,
+    )
+    n_history = 0
+    n_remove_from_end = 0
+    # need to pad if too short (since non-causal model)
+    if in_arr.shape[1] < 1024:
+        n_remove_from_end = 1024 - in_arr.shape[1]
+        in_arr = mx.concatenate(
+            [
+                in_arr,
+                mx.zeros((N_FINE_CODEBOOKS, n_remove_from_end)) + CODEBOOK_SIZE,
+            ],
+            axis=1,
+        )
+    # Inference
+    n_loops = (
+        max(0, int(math.ceil((x_coarse_gen.shape[1] - (1024 - n_history)) / 512))) + 1
+    )
+    in_arr = in_arr.T
+    for n in tqdm.tqdm(range(n_loops)):
+        start_idx = mx.min(mx.array([n * 512, in_arr.shape[0] - 1024])).item()
+        start_fill_idx = mx.min(
+            mx.array([n_history + n * 512, in_arr.shape[0] - 512])
+        ).item()
+        rel_start_fill_idx = start_fill_idx - start_idx
+        in_buffer = in_arr[start_idx : start_idx + 1024, :][None]
+        for nn in range(n_coarse, N_FINE_CODEBOOKS):
+            logits = model(nn, in_buffer)
+            if temp is None:
+                relevant_logits = logits[0, rel_start_fill_idx:, :CODEBOOK_SIZE]
+                codebook_preds = mx.argmax(relevant_logits, -1)
+            else:
+                relevant_logits = logits[0, :, :CODEBOOK_SIZE] / temp
+                probs = mx.softmax(relevant_logits, dim=-1)
+                codebook_preds = mx.random.categorical(
+                    probs[rel_start_fill_idx:1024], num_samples=1
+                ).reshape(-1)
+            codebook_preds = codebook_preds.to(mx.int32)
+            in_buffer[0, rel_start_fill_idx:, nn] = codebook_preds
+        for nn in range(n_coarse, N_FINE_CODEBOOKS):
+            in_arr[
+                start_fill_idx : start_fill_idx + (1024 - rel_start_fill_idx), nn
+            ] = in_buffer[0, rel_start_fill_idx:, nn]
+    gen_fine_arr = in_arr.squeeze().T
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bark inference script")
     parser.add_argument("model_path")
@@ -474,6 +533,10 @@ if __name__ == "__main__":
         bark_text, tokenizer, "Hello World!", use_kv_caching=True
     )
     # generate waveform
-    coarse_codes = generate_coarse(bark_coarse, x_semantic=semantic_tokens)
+    coarse_codes = generate_coarse(
+        bark_coarse, x_semantic=semantic_tokens, use_kv_caching=True
+    )
+    # generate fine codes
+    fine_codes = generate_fine(bark_fine, coarse_codes)
 
     pass
