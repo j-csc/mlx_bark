@@ -18,6 +18,8 @@ from transformers import BertTokenizer
 import glob
 import tqdm
 import math
+from torch_codec import codec_decode
+from scipy.io.wavfile import write as write_wav
 
 TEXT_ENCODING_OFFSET = 10_048
 SEMANTIC_PAD_TOKEN = 10_000
@@ -281,7 +283,7 @@ class FineGPT(nn.Module):
         self.ln_f = nn.LayerNorm(args.n_embd)
         self.lm_heads = [
             nn.Linear(args.n_embd, args.output_vocab_size, bias=False)
-            for _ in range(args.n_codes_total)
+            for _ in range(args.n_codes_given, args.n_codes_total)
         ]
         for i in range(self.n_codes_total - args.n_codes_given):
             self.wtes[i + 1].weight = self.lm_heads[i].weight
@@ -293,9 +295,10 @@ class FineGPT(nn.Module):
         ), f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         assert pred_idx > 0, "cannot predict 0th codebook"
         assert codes == self.n_codes_total, (b, t, codes)
-        pos = mx.arange(0, t, dtype=mx.int64).reshape(1, t)  # shape (1, t)
+        pos = mx.arange(0, t).astype(mx.int64).reshape(1, t)  # shape (1, t)
         tok_embs = [
-            wte(idx[:, :, i]).reshape(b, t, -1, 1) for i, wte in enumerate(self.wtes)
+            wte(idx[:, :, i].astype(mx.int32)).reshape(b, t, -1, 1)
+            for i, wte in enumerate(self.wtes)
         ]  # token embeddings of shape (b, t, n_embd)
         tok_emb = mx.concatenate(tok_embs, axis=-1)
         pos_emb = self.wpe(pos)  # position embeddings of shape (1, t, n_embd)
@@ -337,6 +340,7 @@ def generate_text_semantic(
     temp: float = 0.7,
     use_kv_caching: bool = False,
 ):
+    """Generate semantic tokens from text."""
     print("Generating semantic tokens...")
     encoded_text = (
         mx.array(tokenizer.encode(text, add_special_tokens=False))
@@ -390,7 +394,8 @@ def generate_coarse(
     sliding_window_len=60,
     use_kv_caching=False,
 ):
-    print("Generating coarse codes...")
+    """Generate coarse tokens from semantic tokens."""
+    print("Generating coarse tokens...")
     semantic_to_coarse_ratio = COARSE_RATE_HZ / SEMANTIC_RATE_HZ * N_COARSE_CODEBOOKS
     max_semantic_history = int(
         math.floor(max_coarse_history / semantic_to_coarse_ratio)
@@ -467,6 +472,8 @@ def generate_fine(
     x_coarse_gen: mx.array,
     temp: float = 0.5,
 ):
+    """Generate fine tokens from coarse tokens."""
+    print("Generating fine tokens...")
     x_fine_history = None
     n_coarse = x_coarse_gen.shape[0]
     in_arr = mx.concatenate(
@@ -508,17 +515,22 @@ def generate_fine(
                 codebook_preds = mx.argmax(relevant_logits, -1)
             else:
                 relevant_logits = logits[0, :, :CODEBOOK_SIZE] / temp
-                probs = mx.softmax(relevant_logits, dim=-1)
+                probs = mx.softmax(relevant_logits, axis=-1)
                 codebook_preds = mx.random.categorical(
                     probs[rel_start_fill_idx:1024], num_samples=1
                 ).reshape(-1)
-            codebook_preds = codebook_preds.to(mx.int32)
+            codebook_preds = codebook_preds.astype(mx.int32)
             in_buffer[0, rel_start_fill_idx:, nn] = codebook_preds
         for nn in range(n_coarse, N_FINE_CODEBOOKS):
             in_arr[
                 start_fill_idx : start_fill_idx + (1024 - rel_start_fill_idx), nn
             ] = in_buffer[0, rel_start_fill_idx:, nn]
     gen_fine_arr = in_arr.squeeze().T
+    gen_fine_arr = gen_fine_arr[:, n_history:]
+    if n_remove_from_end > 0:
+        gen_fine_arr = gen_fine_arr[:, :-n_remove_from_end]
+    assert gen_fine_arr.shape[-1] == x_coarse_gen.shape[-1]
+    return gen_fine_arr
 
 
 if __name__ == "__main__":
@@ -533,10 +545,14 @@ if __name__ == "__main__":
         bark_text, tokenizer, "Hello World!", use_kv_caching=True
     )
     # generate waveform
-    coarse_codes = generate_coarse(
+    coarse_tokens = generate_coarse(
         bark_coarse, x_semantic=semantic_tokens, use_kv_caching=True
     )
     # generate fine codes
-    fine_codes = generate_fine(bark_fine, coarse_codes)
+    fine_tokens = generate_fine(bark_fine, coarse_tokens, temp=0.5)
+    print(fine_tokens, fine_tokens.shape)
+    # codec decode
+    audio_arr = codec_decode(fine_tokens)
+    print(audio_arr, audio_arr.shape)
 
-    pass
+    write_wav("generation.wav", SAMPLE_RATE, audio_arr)
