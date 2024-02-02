@@ -4,6 +4,11 @@ A port of Suno's [Bark](https://github.com/suno-ai/bark) model in Apple's ML Fra
 
 Repository is under active development, but the model is functional.
 
+### TODO
+- [ ] Add support for MLX based Encodec
+- [ ] Add support for MLX based Tokenizer
+- [ ] Fix softmax and add multinomial sampling to MLX repo
+
 ### Example
 
 > Hello World!
