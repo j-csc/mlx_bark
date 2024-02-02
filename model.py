@@ -20,11 +20,8 @@ import tqdm
 import math
 from torch_codec import codec_decode
 from scipy.io.wavfile import write as write_wav
-import torch.nn.functional as F
-import torch
 
 mx.random.seed(42)
-torch.manual_seed(42)
 
 TEXT_ENCODING_OFFSET = 10_048
 SEMANTIC_PAD_TOKEN = 10_000
