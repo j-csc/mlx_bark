@@ -7,7 +7,7 @@ Much of this code is adapted from:
 import argparse
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, Dict
-from mlx.utils import tree_unflatten
+from mlx.utils import tree_unflatten, tree_map
 
 from enum import Enum
 import mlx.core as mx
@@ -20,6 +20,8 @@ import tqdm
 import math
 from torch_codec import codec_decode
 from scipy.io.wavfile import write as write_wav
+import torch.nn.functional as F
+import torch
 
 TEXT_ENCODING_OFFSET = 10_048
 SEMANTIC_PAD_TOKEN = 10_000
@@ -323,13 +325,14 @@ def load_model(model_dir: str):
         weights = tree_unflatten(list(weights.items()))
         if "coarse" in f:
             bark_coarse.update(weights)
+            mx.eval(bark_coarse.parameters())
         elif "fine" in f:
             bark_fine.update(weights)
+            mx.eval(bark_fine.parameters())
         elif "text" in f:
             bark_text.update(weights)
-    mx.eval(bark_coarse.parameters())
-    mx.eval(bark_fine.parameters())
-    mx.eval(bark_text.parameters())
+            mx.eval(bark_text.parameters())
+        del weights
     return tokenizer, bark_coarse, bark_fine, bark_text
 
 
@@ -355,10 +358,13 @@ def generate_text_semantic(
         constant_values=TEXT_PAD_TOKEN,
     )
     semantic_history = mx.array([SEMANTIC_PAD_TOKEN] * 256)
-    x = mx.concatenate(
-        [encoded_text, semantic_history, mx.array([SEMANTIC_INFER_TOKEN])]
-    ).reshape(1, -1)
-
+    x = (
+        mx.concatenate(
+            [encoded_text, semantic_history, mx.array([SEMANTIC_INFER_TOKEN])]
+        )
+        .reshape(1, -1)
+        .astype(mx.int64)
+    )
     n_tot_steps = 768
     kv_cache = None
     for i in tqdm.tqdm(range(n_tot_steps)):
@@ -366,7 +372,6 @@ def generate_text_semantic(
             x_input = x[:, -1:]
         else:
             x_input = x
-
         logits, kv_cache = model(
             x_input, merge_context=True, use_cache=use_kv_caching, past_kv=kv_cache
         )
@@ -375,12 +380,14 @@ def generate_text_semantic(
         relevant_logits = mx.concatenate(
             [relevant_logits, logits[0, 0, SEMANTIC_PAD_TOKEN].reshape(1)], axis=-1
         )
-        probs = mx.softmax(relevant_logits / temp, axis=-1)
+        probs = mx.softmax((relevant_logits / temp), axis=-1)
         next_token = mx.random.categorical(probs, num_samples=1)
         next_token = next_token.astype(mx.int32)
         if next_token == SEMANTIC_VOCAB_SIZE or (probs[-1] >= 0.2):
             break
-        x = mx.concatenate([x, next_token.reshape(1, 1)], axis=1)
+        x = mx.concatenate([x, next_token.reshape(1, -1)], axis=1)
+        if i == n_tot_steps - 1:
+            break
     out = x.squeeze()[256 + 256 + 1 :]
     return out
 
@@ -537,22 +544,24 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bark inference script")
     parser.add_argument("model_path")
     args = parser.parse_args()
-
+    mx.random.seed(42)
     tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
+    text = "hello world"
 
     # generate semantic tokens
     semantic_tokens = generate_text_semantic(
-        bark_text, tokenizer, "Hello World!", use_kv_caching=True
+        bark_text, tokenizer, text, use_kv_caching=True
     )
-    # generate waveform
-    coarse_tokens = generate_coarse(
-        bark_coarse, x_semantic=semantic_tokens, use_kv_caching=True
-    )
-    # generate fine codes
-    fine_tokens = generate_fine(bark_fine, coarse_tokens, temp=0.5)
-    print(fine_tokens, fine_tokens.shape)
-    # codec decode
-    audio_arr = codec_decode(fine_tokens)
-    print(audio_arr, audio_arr.shape)
 
-    write_wav("generation.wav", SAMPLE_RATE, audio_arr)
+    # # generate waveform
+    # coarse_tokens = generate_coarse(
+    #     bark_coarse, x_semantic=semantic_tokens, use_kv_caching=True
+    # )
+    # # generate fine codes
+    # fine_tokens = generate_fine(bark_fine, coarse_tokens, temp=0.5)
+    # print(fine_tokens, fine_tokens.shape)
+    # # codec decode
+    # audio_arr = codec_decode(fine_tokens)
+    # print(audio_arr, audio_arr.shape)
+
+    # write_wav("generation.wav", SAMPLE_RATE, audio_arr)
