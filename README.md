@@ -8,6 +8,8 @@ Repository is under active development, but the model is functional.
 
 > Hello World!
 
+https://github.com/j-csc/mlx_bark/assets/5698518/9794bbbd-4b73-4b2e-baca-14807ee3fdd2
+
 ### Setup
 
 First, install the dependencies:
