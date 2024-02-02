@@ -382,19 +382,11 @@ def generate_text_semantic(
         relevant_logits = mx.concatenate(
             [relevant_logits, logits[0, 0, SEMANTIC_PAD_TOKEN].reshape(1)], axis=-1
         )
+        next_token = mx.random.categorical(
+            relevant_logits * 1 / (temp), num_samples=1
+        ).astype(mx.int32)
 
-        probs = mx.softmax((relevant_logits / temp), axis=-1)
-
-        # To fix
-        probs = torch.tensor(np.array(probs))
-        torch_next_token = torch.multinomial(probs, 1)
-        next_token = mx.array(torch_next_token.numpy()).astype(mx.int32)
-
-        # MLX Version
-        # next_token = mx.random.categorical(probs, num_samples=1)
-        # next_token = next_token.astype(mx.int32)
-
-        if next_token == SEMANTIC_VOCAB_SIZE or (probs[-1] >= 0.2):
+        if next_token == SEMANTIC_VOCAB_SIZE:
             print(f"Early stop at step {i} with token {next_token}")
             break
         x = mx.concatenate([x, next_token.reshape(1, -1)], axis=1)
@@ -469,14 +461,9 @@ def generate_coarse(
             )
             logit_end_idx = min(logit_end_idx, logits.shape[-1])
             relevant_logits = logits[0, 0, logit_start_idx:logit_end_idx]
-            probs = mx.softmax(relevant_logits / temp, axis=-1)
-            # To fix
-            probs = torch.tensor(np.array(probs))
-            torch_next_token = torch.multinomial(probs, 1)
-
-            # MLX Version
-            # item_next = mx.random.categorical(probs, num_samples=1).astype(mx.int32)
-            item_next = mx.array(torch_next_token.numpy()).astype(mx.int32)
+            item_next = mx.random.categorical(
+                relevant_logits * (1 / temp), num_samples=1
+            ).astype(mx.int32)
 
             item_next += logit_start_idx
             x_coarse_in = mx.concatenate([x_coarse_in, item_next.reshape(1, 1)], axis=1)
@@ -541,20 +528,13 @@ def generate_fine(
                 codebook_preds = mx.argmax(relevant_logits, -1)
             else:
                 relevant_logits = logits[0, :, :CODEBOOK_SIZE] / temp
-                probs = mx.softmax(relevant_logits, axis=-1)
-                # To fix
-                probs = torch.tensor(np.array(probs))
-                codebook_preds = torch.multinomial(
-                    probs[rel_start_fill_idx:1024], num_samples=1
-                ).reshape(-1)
-                codebook_preds = mx.array(codebook_preds.numpy()).astype(mx.int32)
-
-                # MLX Version
-                # codebook_preds = mx.random.categorical(
-                #     probs[rel_start_fill_idx:1024], num_samples=1
-                # ).reshape(-1)
-
-            codebook_preds = codebook_preds.astype(mx.int32)
+                codebook_preds = (
+                    mx.random.categorical(
+                        relevant_logits[rel_start_fill_idx:1024], num_samples=1
+                    )
+                    .reshape(-1)
+                    .astype(mx.int32)
+                )
             in_buffer[0, rel_start_fill_idx:, nn] = codebook_preds
         for nn in range(n_coarse, N_FINE_CODEBOOKS):
             in_arr[

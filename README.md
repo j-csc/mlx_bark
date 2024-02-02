@@ -3,7 +3,7 @@
 A port of Suno's [Bark](https://github.com/suno-ai/bark) model in Apple's ML Framework, [MLX](https://github.com/ml-explore/mlx). Bark is a transformer based text-to-audio model that can generate speech and miscellaneous audio i.e. background noise / music.
 
 #### Disclaimer
-Repository is under active development, but the model is functional. Currently the model has a few operations that are not supported in MLX, such as softmax and multinomial sampling, a torch substitute is used for these operations until I can add support for them in MLX. The encodec and tokenizer are also not yet supported in MLX, so the model is not yet pure MLX.
+Repository is under active development, but the model is functional. Currently the model has a few dependencies that are not supported in MLX, such as [encodec](https://github.com/facebookresearch/encodec) and the [tokenizer](https://huggingface.co/bert-base-multilingual-cased). I am working on a port for these dependencies and will update the repository as soon as I have a working solution.
 
 #### TODO
 - [ ] Add support for MLX based Encodec
