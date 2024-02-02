@@ -9,6 +9,7 @@ Repository is under active development, but the model is functional. Currently t
 - [ ] Add support for MLX based Encodec
 - [ ] Add support for MLX based Tokenizer
 - [ ] Fix softmax and add multinomial sampling to MLX repo
+- [ ] Add support for large model (I can't run it on my 16GB RAM machine :D)
 
 ### Example
 
