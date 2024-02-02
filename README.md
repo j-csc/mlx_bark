@@ -2,7 +2,38 @@
 
 A port of Suno's [Bark](https://github.com/suno-ai/bark) model in Apple's ML Framework, [MLX](https://github.com/ml-explore/mlx).
 
-Repository is under active development, but the model is functional. 
+Repository is under active development, but the model is functional.
+
+### Example
+
+> Hello World!
+
+### Setup
+
+First, install the dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+To convert a model, first download the Bark PyTorch checkpoint and convert
+the weights to the MLX format. For example, to convert the `small` model use:
+
+```bash
+huggingface-cli download suno/bark coarse.pt fine.pt text.pt
+```
+
+Then, convert the weights to the MLX format:
+
+```bash
+python convert.py weights/
+```
+
+### Running the model 
+```bash
+# Run the model
+python model.py weights/ "hello world!"
+```
 
 ### Requirements:
 
@@ -17,18 +48,6 @@ Listed in `requirements.txt`
 - [torch](https://pytorch.org/get-started/locally/)
 - [encodec](https://pypi.org/project/encodec/)
 - [scipy](https://www.scipy.org/install.html)
-
-### Quick Start: 
-```bash
-# Download weights
-huggingface-cli download suno/bark coarse.pt fine.pt text.pt
-
-# Convert to npz format
-python convert.py weights/
-
-# Run the model
-python model.py weights/
-```
 
 ### Acknowledgements
 Thanks to Suno for the original model, weights and training code repository. Also thanks to the MLX team for the MLX framework and examples.
