@@ -380,10 +380,12 @@ def generate_text_semantic(
         relevant_logits = mx.concatenate(
             [relevant_logits, logits[0, 0, SEMANTIC_PAD_TOKEN].reshape(1)], axis=-1
         )
+        print(mx.mean(relevant_logits), mx.mean(relevant_logits / temp))
         probs = mx.softmax((relevant_logits / temp), axis=-1)
         next_token = mx.random.categorical(probs, num_samples=1)
         next_token = next_token.astype(mx.int32)
         if next_token == SEMANTIC_VOCAB_SIZE or (probs[-1] >= 0.2):
+            print(f"Early stop at step {i} with token {next_token}")
             break
         x = mx.concatenate([x, next_token.reshape(1, -1)], axis=1)
         if i == n_tot_steps - 1:
