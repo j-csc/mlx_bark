@@ -23,6 +23,9 @@ from scipy.io.wavfile import write as write_wav
 import torch.nn.functional as F
 import torch
 
+mx.random.seed(42)
+torch.manual_seed(42)
+
 TEXT_ENCODING_OFFSET = 10_048
 SEMANTIC_PAD_TOKEN = 10_000
 TEXT_PAD_TOKEN = 129595
@@ -332,7 +335,6 @@ def load_model(model_dir: str):
         elif "text" in f:
             bark_text.update(weights)
             mx.eval(bark_text.parameters())
-        del weights
     return tokenizer, bark_coarse, bark_fine, bark_text
 
 
@@ -380,11 +382,16 @@ def generate_text_semantic(
         relevant_logits = mx.concatenate(
             [relevant_logits, logits[0, 0, SEMANTIC_PAD_TOKEN].reshape(1)], axis=-1
         )
-        print(mx.mean(relevant_logits), mx.mean(relevant_logits / temp))
-        probs = mx.softmax((relevant_logits / temp), axis=-1)
-        next_token = mx.random.categorical(probs, num_samples=1)
-        next_token = next_token.astype(mx.int32)
-        if next_token == SEMANTIC_VOCAB_SIZE or (probs[-1] >= 0.2):
+        # probs = mx.softmax((relevant_logits / temp), axis=-1)
+        # next_token = mx.random.categorical(probs, num_samples=1)
+        # next_token = next_token.astype(mx.int32)
+
+        # WHY IS THIS NOT WORKING FOR MLX? VALUES INCONSISTENT
+        torch_probs = F.softmax(torch.tensor(np.array(relevant_logits / temp)), dim=-1)
+        torch_next_token = torch.multinomial(torch_probs, 1)
+        next_token = mx.array(torch_next_token.numpy())
+
+        if next_token == SEMANTIC_VOCAB_SIZE or (torch_probs[-1] >= 0.2):
             print(f"Early stop at step {i} with token {next_token}")
             break
         x = mx.concatenate([x, next_token.reshape(1, -1)], axis=1)
@@ -459,8 +466,16 @@ def generate_coarse(
             )
             logit_end_idx = min(logit_end_idx, logits.shape[-1])
             relevant_logits = logits[0, 0, logit_start_idx:logit_end_idx]
-            probs = mx.softmax(relevant_logits / temp, axis=-1)
-            item_next = mx.random.categorical(probs, num_samples=1).astype(mx.int32)
+            # probs = mx.softmax(relevant_logits / temp, axis=-1)
+            # item_next = mx.random.categorical(probs, num_samples=1).astype(mx.int32)
+
+            # WHY IS THIS NOT WORKING FOR MLX? VALUES INCONSISTENT
+            torch_probs = F.softmax(
+                torch.tensor(np.array(relevant_logits / temp)), dim=-1
+            )
+            torch_next_token = torch.multinomial(torch_probs, 1)
+            item_next = mx.array(torch_next_token.numpy()).astype(mx.int32)
+
             item_next += logit_start_idx
             x_coarse_in = mx.concatenate([x_coarse_in, item_next.reshape(1, 1)], axis=1)
             x_in = mx.concatenate([x_in, item_next.reshape(1, 1)], axis=1)
@@ -524,10 +539,19 @@ def generate_fine(
                 codebook_preds = mx.argmax(relevant_logits, -1)
             else:
                 relevant_logits = logits[0, :, :CODEBOOK_SIZE] / temp
-                probs = mx.softmax(relevant_logits, axis=-1)
-                codebook_preds = mx.random.categorical(
-                    probs[rel_start_fill_idx:1024], num_samples=1
+
+                torch_probs = F.softmax(torch.tensor(np.array(relevant_logits)), dim=-1)
+                codebook_preds = torch.multinomial(
+                    torch_probs[rel_start_fill_idx:1024], num_samples=1
                 ).reshape(-1)
+                codebook_preds = mx.array(codebook_preds.numpy()).astype(mx.int32)
+
+                # TORCH, WHY DOES IT NOT WORK FOR MLX?
+                # probs = mx.softmax(relevant_logits, axis=-1)
+                # codebook_preds = mx.random.categorical(
+                #     probs[rel_start_fill_idx:1024], num_samples=1
+                # ).reshape(-1)
+
             codebook_preds = codebook_preds.astype(mx.int32)
             in_buffer[0, rel_start_fill_idx:, nn] = codebook_preds
         for nn in range(n_coarse, N_FINE_CODEBOOKS):
@@ -542,28 +566,33 @@ def generate_fine(
     return gen_fine_arr
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Bark inference script")
-    parser.add_argument("model_path")
-    args = parser.parse_args()
-    mx.random.seed(42)
+def generate(text):
     tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
-    text = "hello world"
 
     # generate semantic tokens
     semantic_tokens = generate_text_semantic(
         bark_text, tokenizer, text, use_kv_caching=True
     )
 
-    # # generate waveform
-    # coarse_tokens = generate_coarse(
-    #     bark_coarse, x_semantic=semantic_tokens, use_kv_caching=True
-    # )
-    # # generate fine codes
-    # fine_tokens = generate_fine(bark_fine, coarse_tokens, temp=0.5)
-    # print(fine_tokens, fine_tokens.shape)
-    # # codec decode
-    # audio_arr = codec_decode(fine_tokens)
-    # print(audio_arr, audio_arr.shape)
+    # generate waveform
+    coarse_tokens = generate_coarse(
+        bark_coarse, x_semantic=semantic_tokens, use_kv_caching=True
+    )
+    # generate fine codes
+    fine_tokens = generate_fine(bark_fine, coarse_tokens, temp=0.5)
 
-    # write_wav("generation.wav", SAMPLE_RATE, audio_arr)
+    # codec decode
+    audio_arr = codec_decode(fine_tokens)
+
+    write_wav("generation.wav", SAMPLE_RATE, audio_arr)
+
+    print("Generation complete!")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Bark inference script")
+    parser.add_argument("model_path", default="models/")
+    parser.add_argument("--text", default="hello world!")
+    args = parser.parse_args()
+
+    generate(args.text)
