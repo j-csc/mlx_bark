@@ -1,3 +1,10 @@
-torch
 encodec
+hf-transfer
+huggingface-hub
 mlx
+numpy
+scipy
+tokenizers
+torch
+tqdm
+transformers
