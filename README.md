@@ -5,6 +5,15 @@ A port of Suno's [Bark](https://github.com/suno-ai/bark) model in Apple's ML Fra
 #### Disclaimer
 Repository is under active development, but the model is functional. Currently the model has a few dependencies that are not supported in MLX, such as [encodec](https://github.com/facebookresearch/encodec) and the [tokenizer](https://huggingface.co/bert-base-multilingual-cased). I am working on a port for these dependencies and will update the repository as soon as I have a working solution.
 
+### Example
+> Hello World! My name is Bark and I'm running on Apple's new machine learning framework MLX
+
+https://github.com/j-csc/mlx_bark/assets/5698518/3cd6373f-1405-49f2-8c1c-465c768b0ff4
+
+> Hello World! [small model]
+
+https://github.com/j-csc/mlx_bark/assets/5698518/cf56efeb-2568-4438-ba66-d04d45500c30
+
 #### TODO
 > Sorted by priority
 - [ ] Add support for MLX based Encodec
@@ -12,13 +21,6 @@ Repository is under active development, but the model is functional. Currently t
 - [X] Fix softmax and multinomial sampling issue
 - [X] Add support for large model
 - [ ] Support for max_gen_duration and history prompts
-
-### Example
-
-> Hello World! [small model]
-
-https://github.com/j-csc/mlx_bark/assets/5698518/cf56efeb-2568-4438-ba66-d04d45500c30
-
 
 ### Setup
 
