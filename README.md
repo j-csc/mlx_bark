@@ -10,10 +10,6 @@ Repository is under active development, but the model is functional. Currently t
 
 https://github.com/j-csc/mlx_bark/assets/5698518/3cd6373f-1405-49f2-8c1c-465c768b0ff4
 
-> Hello World! [small model]
-
-https://github.com/j-csc/mlx_bark/assets/5698518/cf56efeb-2568-4438-ba66-d04d45500c30
-
 #### TODO
 > Sorted by priority
 - [ ] Add support for MLX based Encodec
