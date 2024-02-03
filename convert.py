@@ -8,11 +8,12 @@ import torch
 import glob
 
 
-def weight_mapping(state):
+def weight_mapping(state, model_size):
     # there's no _orig_mod.transformer
     state = {k.replace("_orig_mod.transformer.", ""): v for k, v in state.items()}
     # transformer block mapping
-    for i in range(12):
+    layer_count = 24 if model_size == "large" else 12
+    for i in range(layer_count):
         prefix = f"h.{i}."
         state = {k.replace(prefix, f"layers.{i}."): v for k, v in state.items()}
     # lm_head
@@ -33,8 +34,7 @@ if __name__ == "__main__":
         weights = [file for file in all_files if "_2" not in file]
     for w in weights:
         state = torch.load(w, map_location=torch.device("cpu"))
-        print(w, state["model_args"])
-        state = weight_mapping(state["model"])
+        state = weight_mapping(state["model"], args.model)
         np.savez(
             w.replace(".pt", ".npz"),
             **{
