@@ -9,13 +9,13 @@ Repository is under active development, but the model is functional. Currently t
 > Sorted by priority
 - [ ] Add support for MLX based Encodec
 - [ ] Add support for MLX based Tokenizer
-- [ ] Fix softmax and add multinomial sampling to MLX repo
-- [ ] Add support for large model (I can't run it on my 16GB RAM machine :D)
+- [X] Fix softmax and multinomial sampling issue
+- [X] Add support for large model
 - [ ] Support for max_gen_duration and history prompts
 
 ### Example
 
-> Hello World!
+> Hello World! [small model]
 
 https://github.com/j-csc/mlx_bark/assets/5698518/cf56efeb-2568-4438-ba66-d04d45500c30
 
@@ -38,7 +38,8 @@ huggingface-cli download suno/bark coarse.pt fine.pt text.pt
 Then, convert the weights to the MLX format:
 
 ```bash
-python convert.py weights/
+# for large model, specify --model large instead of small
+python convert.py --torch_weights_dir weights/ --model small 
 ```
 
 ### Running the model 

@@ -22,15 +22,19 @@ def weight_mapping(state):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert Bark weights to MLX")
-    parser.add_argument("torch_weights_dir")
+    parser.add_argument("--torch_weights_dir", default="weights/")
+    parser.add_argument("--model", default="large", choices=["large", "small"])
     args = parser.parse_args()
-    weights = glob.glob(f"{args.torch_weights_dir}*.pt")
+    if args.model == "large":
+        file_pattern = f"{args.torch_weights_dir}*_2.pt"
+        weights = glob.glob(file_pattern)
+    else:
+        all_files = glob.glob(f"{args.torch_weights_dir}*.pt")
+        weights = [file for file in all_files if "_2" not in file]
     for w in weights:
-        state = torch.load(w, map_location=torch.device("cpu"))["model"]
-
-        if "fine" in w:
-            print(state.keys())
-        state = weight_mapping(state)
+        state = torch.load(w, map_location=torch.device("cpu"))
+        print(w, state["model_args"])
+        state = weight_mapping(state["model"])
         np.savez(
             w.replace(".pt", ".npz"),
             **{

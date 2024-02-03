@@ -4,6 +4,7 @@ Much of this code is adapted from:
 - MLX adaptation (https://github.com/vithursant/nanoGPT_mlx/tree/main)
 - Bark official repo (https://github.com/suno-ai/bark)
 """
+
 import argparse
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union, Dict
@@ -51,14 +52,43 @@ class ModelArgs:
     n_head: int = 12
     n_embd: int = 768
     dropout: float = 0.0
-    bias: bool = True
+    bias: bool = False
     n_codes_total: Optional[int] = None
     n_codes_given: Optional[int] = None
 
 
 model_args = {
-    "bark-coarse": ModelArgs(),
-    "bark-fine": ModelArgs(n_codes_given=1, n_codes_total=8),
+    "bark-coarse": ModelArgs(input_vocab_size=12096, output_vocab_size=12096),
+    "bark-fine": ModelArgs(
+        n_codes_given=1, n_codes_total=8, input_vocab_size=1056, output_vocab_size=1056
+    ),
+    "bark-text": ModelArgs(
+        input_vocab_size=129600,
+        output_vocab_size=10048,
+    ),
+    "bark-coarse-large": ModelArgs(
+        n_layer=24,
+        n_head=16,
+        n_embd=1024,
+        input_vocab_size=12096,
+        output_vocab_size=12096,
+    ),
+    "bark-fine-large": ModelArgs(
+        n_codes_given=1,
+        n_codes_total=8,
+        n_layer=24,
+        n_head=16,
+        n_embd=1024,
+        input_vocab_size=1056,
+        output_vocab_size=1056,
+    ),
+    "bark-text-large": ModelArgs(
+        n_layer=24,
+        n_head=16,
+        n_embd=1024,
+        input_vocab_size=129600,
+        output_vocab_size=10048,
+    ),
 }
 
 
@@ -313,13 +343,23 @@ class FineGPT(nn.Module):
         return logits
 
 
-def load_model(model_dir: str):
+def load_model(model_dir: str, model: str):
     # break up the weights into bark-coarse and bark-fine
-    files = glob.glob(f"{model_dir}*.npz")
+    if model == "large":
+        file_pattern = f"{model_dir}*_2.npz"
+        files = glob.glob(file_pattern)
+    else:
+        all_files = glob.glob(f"{model_dir}*.npz")
+        files = [file for file in all_files if "_2" not in file]
     tokenizer = BertTokenizer.from_pretrained("bert-base-multilingual-cased")
-    bark_text = GPT(model_args["bark-coarse"])
-    bark_fine = FineGPT(model_args["bark-fine"])
-    bark_coarse = GPT(model_args["bark-coarse"])
+    if model == "large":
+        bark_text = GPT(model_args["bark-text-large"])
+        bark_fine = FineGPT(model_args["bark-fine-large"])
+        bark_coarse = GPT(model_args["bark-coarse-large"])
+    else:
+        bark_text = GPT(model_args["bark-text"])
+        bark_fine = FineGPT(model_args["bark-fine"])
+        bark_coarse = GPT(model_args["bark-coarse"])
     for f in files:
         weights = mx.load(str(f))
         weights = tree_unflatten(list(weights.items()))
@@ -545,8 +585,8 @@ def generate_fine(
     return gen_fine_arr
 
 
-def generate(text):
-    tokenizer, bark_coarse, bark_fine, bark_text = load_model(args.model_path)
+def generate(path, text, model):
+    tokenizer, bark_coarse, bark_fine, bark_text = load_model(path, model)
 
     # generate semantic tokens
     semantic_tokens = generate_text_semantic(
@@ -570,8 +610,9 @@ def generate(text):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bark inference script")
-    parser.add_argument("model_path", default="models/")
+    parser.add_argument("--path", default="models/")
+    parser.add_argument("--model", default="large", choices=["large", "small"])
     parser.add_argument("--text", default="hello world!")
     args = parser.parse_args()
 
-    generate(args.text)
+    generate(args.path, args.text, args.model)
