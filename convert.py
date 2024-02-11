@@ -35,6 +35,7 @@ if __name__ == "__main__":
     for w in weights:
         state = torch.load(w, map_location=torch.device("cpu"))
         state = weight_mapping(state["model"], args.model)
+        print(state)
         np.savez(
             w.replace(".pt", ".npz"),
             **{

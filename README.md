@@ -43,7 +43,7 @@ python convert.py --torch_weights_dir weights/ --model small
 ### Running the model 
 ```bash
 # Run the model
-python model.py weights/ "hello world!"
+python model.py --path weights/ --model small --text "hello world my name is bark"
 ```
 
 ### Requirements:
